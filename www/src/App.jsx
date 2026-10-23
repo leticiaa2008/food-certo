@@ -1,5 +1,6 @@
 
 import { useState } from 'react';
+import { supabase } from './services/supabase';
 import {
   Camera,
   CameraResultType,
@@ -13,53 +14,92 @@ export default function App() {
   const [mensagem, setMensagem] = useState('');
   const [tipoMensagem, setTipoMensagem] = useState('info');
 
-  async function adicionarCupom(origem) {
-    if (carregando) return;
+  
+async function adicionarCupom(origem) {
+  if (carregando) return;
 
-    setCarregando(true);
-    setMensagem('');
+  setCarregando(true);
+  setMensagem('');
 
-    try {
-      const imagem = await Camera.getPhoto({
-        quality: 70,
-        resultType: CameraResultType.Uri,
-        source: origem,
-        allowEditing: false,
-        promptLabelHeader: 'Anexar comprovante',
-        promptLabelPhoto: 'Escolher da galeria',
-        promptLabelPicture: 'Tirar fotografia',
-        saveToGallery: false,
+  try {
+    const imagem = await Camera.getPhoto({
+      quality: 70,
+      resultType: CameraResultType.Uri,
+      source: origem,
+      allowEditing: false,
+      promptLabelHeader: 'Anexar comprovante',
+      promptLabelPhoto: 'Escolher da galeria',
+      promptLabelPicture: 'Tirar fotografia',
+      saveToGallery: false,
+    });
+
+    if (!imagem?.webPath) {
+      throw new Error('Não foi possível carregar a imagem.');
+    }
+
+    setMensagem('Enviando foto para a nuvem...');
+    setTipoMensagem('info');
+
+    // Converte a imagem capturada em Blob.
+    const resposta = await fetch(imagem.webPath);
+    if (!resposta.ok) {
+      throw new Error('Não foi possível ler a imagem capturada.');
+    }
+
+    const blob = await resposta.blob();
+
+    // Gera um nome único para cada arquivo.
+    const nomeArquivo = `cupom-${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2)}.jpg`;
+
+    // Envia a imagem para o Supabase Storage.
+    const { data, error } = await supabase.storage
+      .from('fotos-camera')
+      .upload(nomeArquivo, blob, {
+        contentType: blob.type || 'image/jpeg',
+        upsert: false,
       });
 
-      if (!imagem?.webPath) {
-        setMensagem('Não foi possível carregar essa imagem.');
-        setTipoMensagem('erro');
-        return;
-      }
+    if (error) throw error;
 
-      setCupons((anteriores) => [
-        {
-          id: `${Date.now()}-${Math.random()}`,
-          webPath: imagem.webPath,
-          data: new Date().toLocaleString('pt-BR'),
-          origem:
-            origem === CameraSource.Camera
-              ? 'Capturado pela câmera'
-              : 'Selecionado da galeria',
-        },
-        ...anteriores,
-      ]);
+    // Recupera a URL pública da imagem enviada.
+    const { data: urlData } = supabase.storage
+      .from('fotos-camera')
+      .getPublicUrl(data.path);
 
-      setMensagem('Comprovante adicionado com sucesso!');
-      setTipoMensagem('sucesso');
-    } catch (erro) {
-      console.warn('Captura cancelada ou indisponível:', erro);
-      setMensagem('Operação cancelada. Você pode tentar novamente.');
-      setTipoMensagem('info');
-    } finally {
-      setCarregando(false);
-    }
+    const publicUrl = urlData.publicUrl;
+
+    // Adiciona o comprovante à interface.
+    setCupons((anteriores) => [
+      {
+        id: `${Date.now()}-${Math.random()}`,
+        webPath: publicUrl,
+        publicUrl,
+        caminhoStorage: data.path,
+        data: new Date().toLocaleString('pt-BR'),
+        origem:
+          origem === CameraSource.Camera
+            ? 'Capturado pela câmera'
+            : 'Selecionado da galeria',
+      },
+      ...anteriores,
+    ]);
+
+    setMensagem('Foto enviada e salva na nuvem com sucesso!');
+    setTipoMensagem('sucesso');
+  } catch (erro) {
+    console.error('Erro ao capturar ou enviar foto:', erro);
+
+    setMensagem(
+      erro?.message || 'Não foi possível enviar a foto. Tente novamente.'
+    );
+    setTipoMensagem('erro');
+  } finally {
+    setCarregando(false);
   }
+}
+
 
   function removerCupom(id) {
     setCupons((anteriores) =>
